@@ -1,0 +1,23 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36930.0 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{888888A0-9F3D-457C-B088-3A5042F75D52}") = "PCDB Filter", "PCDB Filter\PCDB Filter.pyproj", "{695ABCDD-0732-4EC5-A6A3-D3370A58EF4C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{695ABCDD-0732-4EC5-A6A3-D3370A58EF4C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{695ABCDD-0732-4EC5-A6A3-D3370A58EF4C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {69168156-1BBA-407C-A059-529E52431B7B}
+	EndGlobalSection
+EndGlobal
