@@ -31,7 +31,6 @@ def normalize_text_columns(df: pd.DataFrame) -> pd.DataFrame:
     text_cols = [
         "VIN", "VMAKE", "VMODEL", "DC_PREFIX", "DC_NAME", "DC_FAULT",
         "COMMENT", "SOURCE", "LOG_NO", "PROVINCE", "INJURY", "RECAL_MF",
-        "TSRC NOTES",
     ]
     for col in text_cols:
         if col in df.columns:
@@ -145,13 +144,6 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
     df_xlsx["SOURCE"] = "TC Logs"
     df_csv["SOURCE"] = "Complaints_CSV"
 
-    # Make sure TSRC NOTES exists in both DataFrames so it survives concat.
-    # The XLSX usually has it filled in; the CSV does not have this column at all.
-    if "TSRC NOTES" not in df_xlsx.columns:
-        df_xlsx["TSRC NOTES"] = pd.NA
-    if "TSRC NOTES" not in df_csv.columns:
-        df_csv["TSRC NOTES"] = pd.NA
-
     # Align columns, then combine
     all_columns = sorted(set(df_xlsx.columns).union(set(df_csv.columns)))
     df_xlsx = df_xlsx.reindex(columns=all_columns)
@@ -195,7 +187,6 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
         "PROVINCE",
         "INJURY",
         "RECAL_MF",
-        "TSRC NOTES",
     ]
     df_sheet1 = df[sheet1_source_cols].copy()
 
@@ -214,7 +205,6 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
         "DC_FAULT": "DC FAULT",
         "COMMENT": "COMPLAINT",
         "RECAL_MF": "RECALL MF",
-        "TSRC NOTES": "TSRC Notes",
     })
 
     model_counts = df_sheet1["MODEL"].value_counts(dropna=False)
@@ -224,6 +214,9 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
         by=["MODEL_COUNT", "MODEL", "MODEL YEAR", "DC PREFIX", "DC FAULT"],
         ascending=[False, True, False, True, True]
     ).drop(columns=["MODEL_COUNT"]).reset_index(drop=True)
+
+    # Empty annotation column for the user to fill in manually
+    df_sheet1["TSRC Notes"] = ""
 
     # ---------------------------
     # Sheet 2: Vehicle Year Counts
