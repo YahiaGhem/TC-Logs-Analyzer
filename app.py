@@ -1,5 +1,6 @@
 import io
 import re
+import numpy as np
 import pandas as pd
 import streamlit as st
 from openpyxl import load_workbook
@@ -23,16 +24,60 @@ REQUIRED_MAIN_COLS = [
     "DC_PREFIX", "DC_NAME", "DC_FAULT", "COMMENT"
 ]
 
+# Extra columns we now extract from both files for Sheet 1
+EXTRA_SHEET1_COLS = ["LOG_NO", "DATE_REP", "PROVINCE", "INJURY", "RECAL_MF"]
+
 def normalize_text_columns(df: pd.DataFrame) -> pd.DataFrame:
-    for col in ["VIN", "VMAKE", "VMODEL", "DC_PREFIX", "DC_NAME", "DC_FAULT", "COMMENT", "SOURCE"]:
+    text_cols = [
+        "VIN", "VMAKE", "VMODEL", "DC_PREFIX", "DC_NAME", "DC_FAULT",
+        "COMMENT", "SOURCE", "LOG_NO", "PROVINCE", "INJURY", "RECAL_MF",
+        "TSRC NOTES",
+    ]
+    for col in text_cols:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
-            df.loc[df[col].isin(["nan", "None", ""]), col] = pd.NA
+            df.loc[df[col].isin(["nan", "None", "NaT", ""]), col] = pd.NA
     return df
 
+def parse_dates(series: pd.Series) -> pd.Series:
+    """
+    Parse a date column that may contain a mix of:
+      - real datetimes (pandas / python),
+      - date strings ("3/16/2026"),
+      - Excel serial day numbers (e.g. 46023 → 2026-01-01).
+    """
+    result = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+
+    # Detect numeric-like values (Excel serial numbers come through as int/float)
+    is_numeric_like = series.apply(
+        lambda v: isinstance(v, (int, float, np.integer, np.floating)) and not pd.isna(v)
+    )
+
+    # Strings / datetimes branch
+    non_numeric = series[~is_numeric_like]
+    parsed_str = pd.to_datetime(non_numeric, errors="coerce")
+    result.loc[non_numeric.index] = parsed_str
+
+    # Excel serial branch (days since 1899-12-30)
+    numeric_vals = series[is_numeric_like]
+    if not numeric_vals.empty:
+        nums = pd.to_numeric(numeric_vals, errors="coerce")
+        excel_dates = pd.to_datetime(
+            nums, origin="1899-12-30", unit="D", errors="coerce"
+        )
+        result.loc[numeric_vals.index] = excel_dates
+
+    return result
+
+def split_recalls(value) -> list:
+    """Split a RECAL_MF cell into individual recall codes.
+    Handles separators like '/', ',', and ';' with optional spaces."""
+    if pd.isna(value):
+        return []
+    parts = re.split(r"[/,;]", str(value))
+    return [p.strip().upper() for p in parts if p.strip()]
+
 def standardize_csv_columns(df_csv: pd.DataFrame) -> pd.DataFrame:
-    if "DATE_REP" in df_csv.columns and "DATE_REPORT" not in df_csv.columns:
-        df_csv = df_csv.rename(columns={"DATE_REP": "DATE_REPORT"})
     if "ODOMETER" in df_csv.columns and "ODOMETER (KM)" not in df_csv.columns:
         df_csv = df_csv.rename(columns={"ODOMETER": "ODOMETER (KM)"})
     if "RN" in df_csv.columns and "Column1" not in df_csv.columns:
@@ -100,6 +145,13 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
     df_xlsx["SOURCE"] = "TC Logs"
     df_csv["SOURCE"] = "Complaints_CSV"
 
+    # Make sure TSRC NOTES exists in both DataFrames so it survives concat.
+    # The XLSX usually has it filled in; the CSV does not have this column at all.
+    if "TSRC NOTES" not in df_xlsx.columns:
+        df_xlsx["TSRC NOTES"] = pd.NA
+    if "TSRC NOTES" not in df_csv.columns:
+        df_csv["TSRC NOTES"] = pd.NA
+
     # Align columns, then combine
     all_columns = sorted(set(df_xlsx.columns).union(set(df_csv.columns)))
     df_xlsx = df_xlsx.reindex(columns=all_columns)
@@ -108,6 +160,10 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
 
     # Clean text
     df = normalize_text_columns(df)
+
+    # Parse DATE_REP into proper datetimes (handles real dates AND Excel serials)
+    if "DATE_REP" in df.columns:
+        df["DATE_REP"] = parse_dates(df["DATE_REP"])
 
     # Remove exact duplicate complaints across both files
     df = df.drop_duplicates(subset=[
@@ -118,14 +174,16 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
         "DC_PREFIX",
         "DC_NAME",
         "DC_FAULT",
-        "COMMENT"
+        "COMMENT",
     ]).reset_index(drop=True)
 
     # ---------------------------
     # Sheet 1: Filtered Logs
     # ---------------------------
-    df_sheet1 = df[[
+    sheet1_source_cols = [
         "SOURCE",
+        "LOG_NO",
+        "DATE_REP",
         "VIN",
         "VMAKE",
         "VMODEL",
@@ -133,17 +191,30 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
         "DC_PREFIX",
         "DC_NAME",
         "DC_FAULT",
-        "COMMENT"
-    ]].copy()
+        "COMMENT",
+        "PROVINCE",
+        "INJURY",
+        "RECAL_MF",
+        "TSRC NOTES",
+    ]
+    df_sheet1 = df[sheet1_source_cols].copy()
+
+    # Format date column as YYYY-MM-DD strings (and blank out NaT)
+    df_sheet1["DATE_REP"] = df_sheet1["DATE_REP"].dt.strftime("%Y-%m-%d")
+    df_sheet1["DATE_REP"] = df_sheet1["DATE_REP"].where(df_sheet1["DATE_REP"].notna(), "")
 
     df_sheet1 = df_sheet1.rename(columns={
+        "LOG_NO": "LOG NO",
+        "DATE_REP": "DATE REPORTED",
         "VMAKE": "MAKE",
         "VMODEL": "MODEL",
         "MODEL_YR": "MODEL YEAR",
         "DC_PREFIX": "DC PREFIX",
         "DC_NAME": "DC NAME",
         "DC_FAULT": "DC FAULT",
-        "COMMENT": "COMPLAINT"
+        "COMMENT": "COMPLAINT",
+        "RECAL_MF": "RECALL MF",
+        "TSRC NOTES": "TSRC Notes",
     })
 
     model_counts = df_sheet1["MODEL"].value_counts(dropna=False)
@@ -187,6 +258,9 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
         ascending=[False, True, True, True]
     ).reset_index(drop=True)
 
+    # Empty annotation column for the user to fill in
+    df_sheet2["Description 1"] = ""
+
     # ---------------------------
     # Sheet 3: Vehicle Year Fault Counts
     # ---------------------------
@@ -217,22 +291,17 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
         ascending=[False, True, True, True, True]
     ).reset_index(drop=True)
 
+    df_sheet3["Description 2"] = ""
+
     # ---------------------------
-    # Sheet 4: Recall Counts
+    # Sheet 4: Recall Counts (now sourced from RECAL_MF, NOT from COMMENT)
     # ---------------------------
-    recall_pattern = re.compile(r"\b\d{2}[A-Za-z]\b")
-    comments = df["COMMENT"].dropna().astype(str)
+    recalls = []
+    for value in df["RECAL_MF"].dropna():
+        recalls.extend(split_recalls(value))
 
-    recall_matches = []
-    for comment in comments:
-        matches = recall_pattern.findall(comment.upper())
-        for match in matches:
-            recall_matches.append(match)
-
-    df_sheet4 = pd.DataFrame({"RECALL": recall_matches})
-
-    if not df_sheet4.empty:
-        df_sheet4["RECALL"] = "Recall " + df_sheet4["RECALL"]
+    if recalls:
+        df_sheet4 = pd.DataFrame({"RECALL": ["Recall " + r for r in recalls]})
         df_sheet4 = (
             df_sheet4.groupby("RECALL")
             .size()
@@ -242,6 +311,8 @@ def build_output_workbook(xlsx_file, csv_file) -> tuple[bytes, dict]:
         )
     else:
         df_sheet4 = pd.DataFrame(columns=["RECALL", "TOTAL"])
+
+    df_sheet4["Description 3"] = ""
 
     # ---------------------------
     # Write workbook to memory
